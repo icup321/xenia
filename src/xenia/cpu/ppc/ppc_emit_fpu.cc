@@ -306,6 +306,10 @@ int InstrEmit_fcmpx_(PPCHIRBuilder& f, const InstrData& i, bool ordered) {
   // TODO(benvanik): update FPCC for mffsx/etc
   // TODO(benvanik): update VXSNAN
   const uint32_t crf = i.X.RT >> 2;
+  // Reverted to the version before 66dbd86
+  f.UpdateCR(crf, f.LoadFPR(i.X.RA), f.LoadFPR(i.X.RB));
+  /* This caused STH06 behavior incorrectly e.g. Sonic dies immediately after hit speedpad. Not sure why.
+  // 
   Value* ra = f.LoadFPR(i.X.RA);
   Value* rb = f.LoadFPR(i.X.RB);
 
@@ -319,6 +323,7 @@ int InstrEmit_fcmpx_(PPCHIRBuilder& f, const InstrData& i, bool ordered) {
   f.StoreContext(offsetof(PPCContext, cr0) + (4 * crf) + 1, gt);
   Value* eq = f.And(not_nan, f.CompareEQ(ra, rb));
   f.StoreContext(offsetof(PPCContext, cr0) + (4 * crf) + 2, eq);
+  */
   return 0;
 }
 int InstrEmit_fcmpo(PPCHIRBuilder& f, const InstrData& i) {
