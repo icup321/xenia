@@ -10,6 +10,7 @@
 #include "xenia/gpu/gl4/gl4_command_processor.h"
 
 #include <algorithm>
+#include <fstream>
 
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
@@ -915,7 +916,7 @@ GL4CommandProcessor::UpdateStatus GL4CommandProcessor::UpdateViewportState() {
   if ((regs.pa_cl_vte_cntl & (1 << 0)) > 0) {
     draw_batcher_.set_window_scalar(1.0f, 1.0f);
   } else {
-    draw_batcher_.set_window_scalar(1.0f / 2560.0f, -1.0f / 2560.0f);
+    draw_batcher_.set_window_scalar(1.0f / 1280.0f, -1.0f / 720.0f);
   }
 
   if (!dirty) {
@@ -1011,10 +1012,10 @@ GL4CommandProcessor::UpdateStatus GL4CommandProcessor::UpdateViewportState() {
   } else {
     float texel_offset_x = 0.0f;
     float texel_offset_y = 0.0f;
-    float vpw = 2 * 2560.0f * window_width_scalar;
-    float vph = 2 * 2560.0f * window_height_scalar;
-    float vpx = -2560.0f * window_width_scalar + window_offset_x;
-    float vpy = -2560.0f * window_height_scalar + window_offset_y;
+    float vpw = 2 * 1280.0f * window_width_scalar;
+    float vph = 2 * 720.0f * window_height_scalar;
+    float vpx = -1280.0f * window_width_scalar + window_offset_x;
+    float vpy = -720.0f * window_height_scalar + window_offset_y;
     glViewportIndexedf(0, vpx + texel_offset_x, vpy + texel_offset_y, vpw, vph);
   }
   float voz = vport_zoffset_enable ? regs.pa_cl_vport_zoffset : 0;
@@ -1553,7 +1554,7 @@ bool GL4CommandProcessor::IssueCopy() {
   assert_true(copy_dest_array == 0);
   uint32_t copy_dest_slice = (copy_dest_info >> 4) & 0x7;
   assert_true(copy_dest_slice == 0);
-  auto copy_dest_format =
+  auto copy_dest_format = 
       static_cast<ColorFormat>((copy_dest_info >> 7) & 0x3F);
   uint32_t copy_dest_number = (copy_dest_info >> 13) & 0x7;
   // assert_true(copy_dest_number == 0); // ?
@@ -1766,6 +1767,16 @@ bool GL4CommandProcessor::IssueCopy() {
     window_offset_y |= 0x8000;
   }
 
+  uint32_t dest_texel_size = uint32_t(GetTexelSize(ColorFormatToTextureFormat(copy_dest_format)));
+
+  // Adjust the copy base offset to point to the beginning of the texture, so
+  // we don't run into hiccups down the road (e.g. resolving the last part going
+  // backwards).
+  int32_t dest_offset =
+    window_offset_y * copy_dest_pitch * int(dest_texel_size);
+  dest_offset += window_offset_x * 32 * int(dest_texel_size);
+  copy_dest_base += dest_offset;
+
   // HACK: vertices to use are always in vf0.
   int copy_vertex_fetch_slot = 0;
   int r =
@@ -1788,37 +1799,27 @@ bool GL4CommandProcessor::IssueCopy() {
   assert_true(fetch->size == 6);
   const uint8_t* vertex_addr = memory_->TranslatePhysical(fetch->address << 2);
   trace_writer_.WriteMemoryRead(fetch->address << 2, fetch->size * 4);
-  int32_t dest_min_x = int32_t((std::min(
-      std::min(
-          GpuSwap(xe::load<float>(vertex_addr + 0), Endian(fetch->endian)),
-          GpuSwap(xe::load<float>(vertex_addr + 8), Endian(fetch->endian))),
-      GpuSwap(xe::load<float>(vertex_addr + 16), Endian(fetch->endian)))));
-  int32_t dest_max_x = int32_t((std::max(
-      std::max(
-          GpuSwap(xe::load<float>(vertex_addr + 0), Endian(fetch->endian)),
-          GpuSwap(xe::load<float>(vertex_addr + 8), Endian(fetch->endian))),
-      GpuSwap(xe::load<float>(vertex_addr + 16), Endian(fetch->endian)))));
-  int32_t dest_min_y = int32_t((std::min(
-      std::min(
-          GpuSwap(xe::load<float>(vertex_addr + 4), Endian(fetch->endian)),
-          GpuSwap(xe::load<float>(vertex_addr + 12), Endian(fetch->endian))),
-      GpuSwap(xe::load<float>(vertex_addr + 20), Endian(fetch->endian)))));
-  int32_t dest_max_y = int32_t((std::max(
-      std::max(
-          GpuSwap(xe::load<float>(vertex_addr + 4), Endian(fetch->endian)),
-          GpuSwap(xe::load<float>(vertex_addr + 12), Endian(fetch->endian))),
-      GpuSwap(xe::load<float>(vertex_addr + 20), Endian(fetch->endian)))));
+
+  float dest_points[6];
+  for (int i = 0; i < 6; i++) {
+    dest_points[i] =
+      GpuSwap(xe::load<float>(vertex_addr + i * 4), Endian(fetch->endian)) +
+      0.5f;
+  }
+
+  // Note: The xenos only supports rectangle copies (luckily)
+  int32_t dest_min_x = int32_t(
+    (std::min(std::min(dest_points[0], dest_points[2]), dest_points[4])));
+  int32_t dest_max_x = int32_t(
+    (std::max(std::max(dest_points[0], dest_points[2]), dest_points[4])));
+
+  int32_t dest_min_y = int32_t(
+    (std::min(std::min(dest_points[1], dest_points[3]), dest_points[5])));
+  int32_t dest_max_y = int32_t(
+    (std::max(std::max(dest_points[1], dest_points[3]), dest_points[5])));
   Rect2D dest_rect(dest_min_x, dest_min_y, dest_max_x - dest_min_x,
                    dest_max_y - dest_min_y);
   Rect2D src_rect(0, 0, dest_rect.width, dest_rect.height);
-
-  // The dest base address passed in has already been offset by the window
-  // offset, so to ensure texture lookup works we need to offset it.
-  // TODO(benvanik): allow texture cache to lookup partial textures.
-  // TODO(benvanik): change based on format.
-  int32_t dest_offset = window_offset_y * copy_dest_pitch * int(read_size / 8);
-  dest_offset += window_offset_x * 32 * int(read_size / 8);
-  copy_dest_base += dest_offset;
 
   // Destination pointer in guest memory.
   // We have GL throw bytes directly into it.
@@ -1960,12 +1961,15 @@ GLuint GL4CommandProcessor::GetColorRenderTarget(
     ColorRenderTargetFormat format) {
   // Because we don't know the height of anything, we allocate at full res.
   // At 2560x2560, it's impossible for EDRAM to fit anymore.
-  uint32_t width = 2560;
-  uint32_t height = 2560;
+  uint32_t width = 1280;
+  uint32_t height = 720;
 
   // NOTE: we strip gamma formats down to normal ones.
   if (format == ColorRenderTargetFormat::k_8_8_8_8_GAMMA) {
     format = ColorRenderTargetFormat::k_8_8_8_8;
+  }
+  if (format == ColorRenderTargetFormat::k_2_10_10_10_FLOAT_unknown) {
+    format = ColorRenderTargetFormat::k_2_10_10_10_FLOAT;
   }
 
   GLenum internal_format;
@@ -2012,6 +2016,8 @@ GLuint GL4CommandProcessor::GetColorRenderTarget(
       return it->texture;
     }
   }
+  //std::ofstream log_file("F:\\Code\\Xenia\\build\\bin\\Windows\\Release\\log_file.txt", std::ios_base::out | std::ios_base::app);
+  //log_file << "no cache" << (int)format << std::endl;
   cached_color_render_targets_.push_back(CachedColorRenderTarget());
   auto cached = &cached_color_render_targets_.back();
   cached->base = base;
@@ -2029,8 +2035,8 @@ GLuint GL4CommandProcessor::GetColorRenderTarget(
 GLuint GL4CommandProcessor::GetDepthRenderTarget(
     uint32_t pitch, MsaaSamples samples, uint32_t base,
     DepthRenderTargetFormat format) {
-  uint32_t width = 2560;
-  uint32_t height = 2560;
+  uint32_t width = 1280;
+  uint32_t height = 720;
 
   GLenum internal_format;
   switch (format) {
