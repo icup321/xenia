@@ -51,9 +51,9 @@ static const TextureConfig texture_configs[64] = {
     {TextureFormat::k_4_4_4_4, VK_FORMAT_R4G4B4A4_UNORM_PACK16},
     {TextureFormat::k_10_11_11, VK_FORMAT_B10G11R11_UFLOAT_PACK32},  // ?
     {TextureFormat::k_11_11_10, VK_FORMAT_B10G11R11_UFLOAT_PACK32},  // ?
-    {TextureFormat::k_DXT1, VK_FORMAT_BC1_RGBA_SRGB_BLOCK},
-    {TextureFormat::k_DXT2_3, VK_FORMAT_BC2_SRGB_BLOCK},
-    {TextureFormat::k_DXT4_5, VK_FORMAT_BC3_SRGB_BLOCK},
+    {TextureFormat::k_DXT1, VK_FORMAT_BC1_RGBA_UNORM_BLOCK},
+    {TextureFormat::k_DXT2_3, VK_FORMAT_BC2_UNORM_BLOCK },
+    {TextureFormat::k_DXT4_5, VK_FORMAT_BC3_UNORM_BLOCK },
     {TextureFormat::kUnknown, VK_FORMAT_UNDEFINED},
     {TextureFormat::k_24_8, VK_FORMAT_D24_UNORM_S8_UINT},
     {TextureFormat::k_24_8_FLOAT, VK_FORMAT_D24_UNORM_S8_UINT},  // ?
@@ -440,16 +440,30 @@ bool TextureCache::FreeTexture(Texture* texture) {
 }
 
 TextureCache::Texture* TextureCache::DemandResolveTexture(
-  const TextureInfo& texture_info, TextureFormat format,
-  VkOffset2D* out_offset) {
+  const TextureInfo& texture_info, TextureFormat format) {
   // Check to see if we've already used a texture at this location.
+  /*
+  auto texture_hash = texture_info.hash();
+  for (auto it = textures_.find(texture_hash); it != textures_.end(); ++it) {
+    if (it->second->texture_info == texture_info) {
+      if (it->second->pending_invalidation) {
+        // This texture has been invalidated!
+        RemoveInvalidatedTextures();
+        break;
+      }
+      // Tell the trace writer to "cache" this memory (but not read it)
+      trace_writer_->WriteMemoryReadCachedNop(texture_info.guest_address,
+        texture_info.input_length);
+      return it->second;
+    }
+  }
+  */
   auto texture = LookupAddress(
     texture_info.guest_address, texture_info.size_2d.block_width,
-    texture_info.size_2d.block_height, format, out_offset);
+    texture_info.size_2d.block_height, format, nullptr);
   if (texture) {
     return texture;
   }
-
   // No texture at this location. Make a new one.
   //texture = AllocateTexture(texture_info);
   texture =

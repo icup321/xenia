@@ -1015,7 +1015,7 @@ bool VulkanCommandProcessor::IssueCopy() {
                               &tex_info);
 
   auto texture =
-      texture_cache_->DemandResolveTexture(tex_info, copy_dest_format, nullptr);
+      texture_cache_->DemandResolveTexture(tex_info, copy_dest_format);
   assert_not_null(texture);
   texture->in_flight_fence = current_batch_fence_;
 

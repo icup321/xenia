@@ -120,8 +120,8 @@ class TextureCache {
   // At the very least, it's guaranteed that the image will be large enough to
   // hold the requested size.
   Texture* DemandResolveTexture(const TextureInfo& texture_info,
-                                TextureFormat format, VkOffset2D* out_offset);
-  //                              TextureFormat format);
+                                //TextureFormat format, VkOffset2D* out_offset);
+                                TextureFormat format);
 
   // Clears all cached content.
   void ClearCache();
