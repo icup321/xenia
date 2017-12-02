@@ -24,6 +24,8 @@
 #include "xenia/ui/vulkan/vulkan.h"
 #include "xenia/ui/vulkan/vulkan_device.h"
 
+#include "third_party/vulkan/vk_mem_alloc.h"
+
 namespace xe {
 namespace gpu {
 namespace vulkan {
@@ -42,9 +44,8 @@ class TextureCache {
     VkFormat format;
     VkImage image;
     VkImageLayout image_layout;
-    VkDeviceMemory image_memory;
-    VkDeviceSize memory_offset;
-    VkDeviceSize memory_size;
+    VmaAllocation alloc;
+    VmaAllocationInfo alloc_info;
     VkFramebuffer framebuffer;  // Blit target frame buffer.
 
     uintptr_t access_watch_handle;
@@ -144,6 +145,9 @@ class TextureCache {
   void FlushPendingCommands(VkCommandBuffer command_buffer,
                             VkFence completion_fence);
 
+  static void ConvertTexelCTX1(uint8_t* dest, size_t dest_pitch,
+                               const uint8_t* src, Endian src_endianness);
+
   bool ConvertTexture2D(uint8_t* dest, VkBufferImageCopy* copy_region,
                         const TextureInfo& src);
   bool ConvertTextureCube(uint8_t* dest, VkBufferImageCopy* copy_region,
@@ -187,12 +191,6 @@ class TextureCache {
   std::unique_ptr<xe::ui::vulkan::DescriptorPool> descriptor_pool_ = nullptr;
   std::unordered_map<uint64_t, VkDescriptorSet> texture_bindings_;
   VkDescriptorSetLayout texture_descriptor_set_layout_ = nullptr;
-
-  VkImage empty_image_ = nullptr;
-  VkImageView empty_image_view_ = nullptr;
-  VkDeviceMemory empty_image_memory_ = nullptr;
-  VkSampler empty_sampler_ = nullptr;
-  VkDescriptorSet empty_set_ = nullptr;
 
   ui::vulkan::CircularBuffer staging_buffer_;
   ui::vulkan::CircularBuffer wb_staging_buffer_;
