@@ -200,6 +200,7 @@ TextureCache::TextureCache(Memory* memory, RegisterFile* register_file,
   invalidated_textures_ = &invalidated_textures_sets_[0];
 
   device_queue_ = device_->AcquireQueue();
+  SetupEmptySet();
 }
 
 TextureCache::~TextureCache() {
@@ -207,13 +208,130 @@ TextureCache::~TextureCache() {
     device_->ReleaseQueue(device_queue_);
   }
 
-  // Free all textures allocated.
-  ClearCache();
-  Scavenge();
-
   vmaDestroyAllocator(mem_allocator_);
   vkDestroyDescriptorSetLayout(*device_, texture_descriptor_set_layout_,
                                nullptr);
+}
+
+void TextureCache::SetupEmptySet() {
+  // Create an image first.
+  VkImageCreateInfo image_info = {};
+  image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+  image_info.imageType = VK_IMAGE_TYPE_2D;
+  VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
+  image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+  image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+
+  image_info.format = format;
+  image_info.extent = { 1, 1, 1 };
+  image_info.mipLevels = 1;
+  image_info.arrayLayers = 1;
+  image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+  image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  image_info.queueFamilyIndexCount = 0;
+  image_info.pQueueFamilyIndices = nullptr;
+  image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  VkImage image;
+  auto err = vkCreateImage(*device_, &image_info, nullptr, &image);
+  CheckResult(err, "vkCreateImage");
+
+  VkMemoryRequirements mem_requirements;
+  vkGetImageMemoryRequirements(*device_, image, &mem_requirements);
+
+  // TODO: Use a circular buffer or something else to allocate this memory.
+  // The device has a limited amount (around 64) of memory allocations that we
+  // can make.
+  // Now that we have the size, back the image with GPU memory.
+  auto memory = device_->AllocateMemory(mem_requirements, 0);
+  if (!memory) {
+    // Crap.
+    assert_always();
+    vkDestroyImage(*device_, image, nullptr);
+    return;
+  }
+
+  err = vkBindImageMemory(*device_, image, memory, 0);
+  CheckResult(err, "vkBindImageMemory");
+
+  VkImageViewCreateInfo view_info;
+  view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+  view_info.pNext = nullptr;
+  view_info.flags = 0;
+  view_info.image = image;
+  view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+  view_info.format = format;
+  view_info.components = { VK_COMPONENT_SWIZZLE_ONE, VK_COMPONENT_SWIZZLE_ONE,
+    VK_COMPONENT_SWIZZLE_ONE, VK_COMPONENT_SWIZZLE_ONE };
+  view_info.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+  err = vkCreateImageView(*device_, &view_info, nullptr, &empty_image_view_);
+  CheckResult(err, "vkCreateImageView");
+
+  // Empty image is setup!
+  empty_image_ = image;
+  empty_image_memory_ = memory;
+
+  // Setup an empty sampler
+  VkSamplerCreateInfo sampler_info;
+  sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+  sampler_info.pNext = nullptr;
+  sampler_info.flags = 0;
+  sampler_info.magFilter = VK_FILTER_NEAREST;
+  sampler_info.minFilter = VK_FILTER_NEAREST;
+  sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+  sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  sampler_info.mipLodBias = 0.f;
+  sampler_info.anisotropyEnable = VK_FALSE;
+  sampler_info.maxAnisotropy = 0.f;
+  sampler_info.compareEnable = VK_FALSE;
+  sampler_info.compareOp = VK_COMPARE_OP_NEVER;
+  sampler_info.minLod = 0.f;
+  sampler_info.maxLod = 0.f;
+  sampler_info.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+  sampler_info.unnormalizedCoordinates = VK_FALSE;
+  err = vkCreateSampler(*device_, &sampler_info, nullptr, &empty_sampler_);
+  CheckResult(err, "vkCreateSampler");
+
+  // Okay, allocate and setup an empty descriptor set.
+  VkDescriptorPool pool = descriptor_pool_->descriptor_pool();
+
+  VkDescriptorSetAllocateInfo alloc_info;
+  alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  alloc_info.pNext = nullptr;
+  alloc_info.descriptorPool = pool;
+  alloc_info.descriptorSetCount = 1;
+  alloc_info.pSetLayouts = &texture_descriptor_set_layout_;
+  vkAllocateDescriptorSets(*device_, &alloc_info, &empty_set_);
+
+  VkWriteDescriptorSet empty_write;
+  empty_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+  empty_write.pNext = nullptr;
+  empty_write.dstSet = empty_set_;
+  empty_write.dstBinding = 0;
+  empty_write.dstArrayElement = 0;
+  empty_write.descriptorCount = 32;
+  empty_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+
+  VkDescriptorImageInfo info[32];
+  std::memset(info, 0, sizeof(info));
+  for (int i = 0; i < 32; i++) {
+    info[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    info[i].imageView = empty_image_view_;
+    info[i].sampler = empty_sampler_;
+  }
+
+  empty_write.pImageInfo = info;
+  vkUpdateDescriptorSets(*device_, 1, &empty_write, 0, nullptr);
+}
+
+void TextureCache::DestroyEmptySet() {
+  vkFreeDescriptorSets(*device_, descriptor_pool_->descriptor_pool(), 1,
+    &empty_set_);
+  vkDestroySampler(*device_, empty_sampler_, nullptr);
+  vkDestroyImageView(*device_, empty_image_view_, nullptr);
+  vkDestroyImage(*device_, empty_image_, nullptr);
+  vkFreeMemory(*device_, empty_image_memory_, nullptr);
 }
 
 TextureCache::Texture* TextureCache::AllocateTexture(
@@ -342,15 +460,18 @@ bool TextureCache::FreeTexture(Texture* texture) {
 
 TextureCache::Texture* TextureCache::DemandResolveTexture(
     const TextureInfo& texture_info) {
-  auto texture_hash = texture_info.hash();
-  for (auto it = textures_.find(texture_hash); it != textures_.end(); ++it) {
-    if (it->second->texture_info == texture_info) {
+  // Check to see if we've already used a texture at this location.
+  for (auto it = textures_.begin(); it != textures_.end(); ++it) {
+    auto texture = it->second->texture_info;
+    if (texture.guest_address == texture_info.guest_address &&
+      texture.dimension == Dimension::k2D &&
+      texture.size_2d.input_width == texture_info.size_2d.block_width &&
+      texture.size_2d.input_height == texture_info.size_2d.block_height) {
       if (it->second->pending_invalidation) {
         // This texture has been invalidated!
         RemoveInvalidatedTextures();
         break;
       }
-
       // Tell the trace writer to "cache" this memory (but not read it)
       trace_writer_->WriteMemoryReadCachedNop(texture_info.guest_address,
                                               texture_info.input_length);
@@ -359,22 +480,34 @@ TextureCache::Texture* TextureCache::DemandResolveTexture(
     }
   }
 
-  VkFormatFeatureFlags required_flags = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
-  if (texture_info.texture_format == TextureFormat::k_24_8 ||
-      texture_info.texture_format == TextureFormat::k_24_8_FLOAT) {
-    required_flags |= VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
-  } else {
-    required_flags |= VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
+  // Check resolve textures
+  for (auto it = resolve_textures_.begin(); it != resolve_textures_.end();
+    ++it) {
+    const auto& texture = (*it)->texture_info;
+    if (texture.guest_address == texture_info.guest_address &&
+      texture.dimension == Dimension::k2D &&
+      texture.size_2d.input_width == texture_info.size_2d.block_width &&
+      texture.size_2d.input_height == texture_info.size_2d.block_height) {
+      if ((*it)->pending_invalidation) {
+        // Texture invalidated! Remove.
+        RemoveInvalidatedTextures();
+        break;
+      }
+      return (*it);
+    }
   }
 
-  // No texture at this location. Make a new one.
-  auto texture = AllocateTexture(texture_info, required_flags);
-  if (!texture) {
-    // Failed to allocate texture (out of memory?)
-    assert_always();
-    XELOGE("Vulkan Texture Cache: Failed to allocate texture!");
-    return nullptr;
+  VkFormatFeatureFlags required_flags = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+  if (texture_info.texture_format == TextureFormat::k_24_8 ||
+    texture_info.texture_format == TextureFormat::k_24_8_FLOAT) {
+    required_flags |= VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
   }
+  else {
+    required_flags |= VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
+  }
+  // No texture at this location. Make a new one.
+  //texture = AllocateTexture(texture_info);
+  auto texture = AllocateTexture(texture_info, required_flags);
 
   // Setup a debug name for the texture.
   device_->DbgSetObjectName(
@@ -398,13 +531,18 @@ TextureCache::Texture* TextureCache::DemandResolveTexture(
         touched_texture->pending_invalidation = true;
 
         // Add to pending list so Scavenge will clean it up.
-        self->invalidated_textures_mutex_.lock();
-        self->invalidated_textures_->push_back(touched_texture);
-        self->invalidated_textures_mutex_.unlock();
-      },
-      this, texture);
+        self->invalidated_resolve_textures_mutex_.lock();
+        self->invalidated_resolve_textures_.push_back(touched_texture);
+        self->invalidated_resolve_textures_mutex_.unlock();
 
-  textures_[texture_hash] = texture;
+        //self->invalidated_textures_mutex_.lock();
+        //self->invalidated_textures_->push_back(touched_texture);
+        //self->invalidated_textures_mutex_.unlock();
+  },
+    this, texture);
+
+  resolve_textures_.push_back(texture);
+  //textures_[texture_hash] = texture;
   return texture;
 }
 
@@ -427,6 +565,57 @@ TextureCache::Texture* TextureCache::Demand(const TextureInfo& texture_info,
       return it->second;
     }
   }
+  // Check resolve textures.
+  for (auto it = resolve_textures_.begin(); it != resolve_textures_.end();
+    ++it) {
+    auto texture = (*it);
+    if (texture_info.guest_address == texture->texture_info.guest_address &&
+      texture_info.size_2d.logical_width ==
+      texture->texture_info.size_2d.logical_width &&
+      texture_info.size_2d.logical_height ==
+      texture->texture_info.size_2d.logical_height) {
+      if (texture->pending_invalidation) {
+        // Texture invalidated! Remove.
+        RemoveInvalidatedTextures();
+        break;
+      }
+
+      // Exact match.
+      // TODO: Lazy match (at an offset)
+      // Upgrade this texture to a full texture.
+      texture->is_full_texture = true;
+      texture->texture_info = texture_info;
+
+      if (texture->access_watch_handle) {
+        memory_->CancelAccessWatch(texture->access_watch_handle);
+      }
+
+      // Tell the trace writer to cache this memory but don't read it
+      trace_writer_->WriteMemoryReadCachedNop(texture_info.guest_address,
+        texture_info.input_length);
+
+      texture->access_watch_handle = memory_->AddPhysicalAccessWatch(
+        texture_info.guest_address, texture_info.input_length,
+        cpu::MMIOHandler::kWatchWrite,
+        [](void* context_ptr, void* data_ptr, uint32_t address) {
+        auto self = reinterpret_cast<TextureCache*>(context_ptr);
+        auto touched_texture = reinterpret_cast<Texture*>(data_ptr);
+        // Clear watch handle first so we don't redundantly
+        // remove.
+        touched_texture->access_watch_handle = 0;
+        touched_texture->pending_invalidation = true;
+        // Add to pending list so Scavenge will clean it up.
+        self->invalidated_textures_mutex_.lock();
+        self->invalidated_textures_->push_back(touched_texture);
+        self->invalidated_textures_mutex_.unlock();
+      },
+        this, texture);
+
+      textures_[texture_hash] = *it;
+      it = resolve_textures_.erase(it);
+      return textures_[texture_hash];
+    }
+  }
 
   if (!command_buffer) {
     // Texture not found and no command buffer was passed, preventing us from
@@ -447,6 +636,7 @@ TextureCache::Texture* TextureCache::Demand(const TextureInfo& texture_info,
   // woods yet. This texture could either be a portion of another texture or
   // vice versa. Copy any overlapping textures into this texture.
   // TODO: Byte count -> pixel count (on x and y axes)
+  /*
   VkOffset2D offset;
   auto collide_tex = LookupAddress(
       texture_info.guest_address, texture_info.width + 1,
@@ -454,7 +644,7 @@ TextureCache::Texture* TextureCache::Demand(const TextureInfo& texture_info,
   if (collide_tex != nullptr) {
     // assert_always();
   }
-
+  */
   trace_writer_->WriteMemoryRead(texture_info.guest_address,
                                  texture_info.input_length);
 
@@ -795,6 +985,23 @@ TextureCache::Texture* TextureCache::LookupAddress(uint32_t guest_address,
       }
 
       return it->second;
+    }
+  }
+
+  // Check resolve textures
+  for (auto it = resolve_textures_.begin(); it != resolve_textures_.end();
+    ++it) {
+    const auto& texture_info = (*it)->texture_info;
+    if (texture_info.guest_address == guest_address &&
+      texture_info.dimension == Dimension::k2D &&
+      texture_info.size_2d.input_width == width &&
+      texture_info.size_2d.input_height == height) {
+      if (out_offset) {
+        out_offset->x = 0;
+        out_offset->y = 0;
+      }
+
+      return (*it);
     }
   }
 
@@ -1334,6 +1541,19 @@ VkDescriptorSet TextureCache::PrepareTextureSet(
     return nullptr;
   }
 
+  // Copy in empty descriptors first
+  VkCopyDescriptorSet empty_copy;
+  empty_copy.sType = VK_STRUCTURE_TYPE_COPY_DESCRIPTOR_SET;
+  empty_copy.pNext = nullptr;
+  empty_copy.srcSet = empty_set_;
+  empty_copy.srcBinding = 0;
+  empty_copy.srcArrayElement = 0;
+  empty_copy.dstSet = descriptor_set;
+  empty_copy.dstBinding = 0;
+  empty_copy.dstArrayElement = 0;
+  empty_copy.descriptorCount = 32;
+  vkUpdateDescriptorSets(*device_, 0, nullptr, 1, &empty_copy);
+
   for (uint32_t i = 0; i < update_set_info->image_write_count; i++) {
     update_set_info->image_writes[i].dstSet = descriptor_set;
   }
@@ -1454,6 +1674,24 @@ void TextureCache::RemoveInvalidatedTextures() {
 
     invalidated_textures.clear();
   }
+
+  // Invalidated resolve textures.
+  invalidated_resolve_textures_mutex_.lock();
+  if (!invalidated_resolve_textures_.empty()) {
+    for (auto it = invalidated_resolve_textures_.begin();
+      it != invalidated_resolve_textures_.end(); ++it) {
+      pending_delete_textures_.push_back(*it);
+
+      auto tex =
+        std::find(resolve_textures_.begin(), resolve_textures_.end(), *it);
+      if (tex != resolve_textures_.end()) {
+        resolve_textures_.erase(tex);
+      }
+    }
+
+    invalidated_resolve_textures_.clear();
+  }
+  invalidated_resolve_textures_mutex_.unlock();
 }
 
 void TextureCache::ClearCache() {
