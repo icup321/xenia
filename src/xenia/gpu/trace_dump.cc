@@ -43,6 +43,7 @@ TraceDump::~TraceDump() = default;
 int TraceDump::Main(const std::vector<std::wstring>& args) {
   // Grab path from the flag or unnamed argument.
   std::wstring path;
+  std::wstring output_path;
   if (!FLAGS_target_trace_file.empty()) {
     // Passed as a named argument.
     // TODO(benvanik): find something better than gflags that supports
@@ -51,10 +52,12 @@ int TraceDump::Main(const std::vector<std::wstring>& args) {
   } else if (args.size() >= 2) {
     // Passed as an unnamed argument.
     path = args[1];
-  }
 
-  // If no path passed, ask the user.
-  if (path.empty()) {
+    if (args.size() >= 3) {
+      output_path = args[2];
+    }
+  } else {
+    // Open a file chooser and ask the user.
     auto file_picker = xe::ui::FilePicker::Create();
     file_picker->set_mode(ui::FilePicker::Mode::kOpen);
     file_picker->set_type(ui::FilePicker::Type::kFile);
@@ -91,17 +94,20 @@ int TraceDump::Main(const std::vector<std::wstring>& args) {
   }
 
   // Root file name for outputs.
-  base_output_path_ =
-      xe::fix_path_separators(xe::to_wstring(FLAGS_trace_dump_path));
-  base_output_path_ =
-      xe::join_paths(base_output_path_,
-                     xe::find_name_from_path(xe::fix_path_separators(path)));
+  if (output_path.empty()) {
+    base_output_path_ =
+        xe::fix_path_separators(xe::to_wstring(FLAGS_trace_dump_path));
+    base_output_path_ =
+        xe::join_paths(base_output_path_,
+                       xe::find_name_from_path(xe::fix_path_separators(path)));
+  } else {
+    base_output_path_ = xe::fix_path_separators(output_path);
+  }
 
   // Ensure output path exists.
   xe::filesystem::CreateParentFolder(base_output_path_);
 
-  Run();
-  return 0;
+  return Run();
 }
 
 bool TraceDump::Setup() {
@@ -174,7 +180,7 @@ bool TraceDump::Load(std::wstring trace_file_path) {
   return true;
 }
 
-void TraceDump::Run() {
+int TraceDump::Run() {
   loop_->Post([&]() {
     player_->SeekFrame(0);
     player_->SeekCommand(
@@ -190,13 +196,14 @@ void TraceDump::Run() {
   });
 
   xe::threading::Fence capture_fence;
-  bool did_capture = false;
+  int result = 0;
   loop_->PostDelayed(
       [&]() {
         // Capture.
         auto raw_image = graphics_system_->Capture();
         if (!raw_image) {
           // Failed to capture anything.
+          result = -1;
           capture_fence.Signal();
           return;
         }
@@ -208,7 +215,7 @@ void TraceDump::Run() {
                        raw_image->data.data(),
                        static_cast<int>(raw_image->stride));
 
-        did_capture = true;
+        result = 0;
         capture_fence.Signal();
       },
       50);
@@ -225,7 +232,7 @@ void TraceDump::Run() {
   player_.reset();
   emulator_.reset();
 
-  // TODO(benvanik): die if failed to capture?
+  return result;
 }
 
 }  //  namespace gpu

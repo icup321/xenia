@@ -8,8 +8,8 @@ version: 1.0.{build}-{branch}
 # branches to build
 branches:
   # whitelist
-  only:
-    - master
+  # only:
+  #   - master
 
   # blacklist
   except:
@@ -18,6 +18,14 @@ branches:
 # Do not build on tags (GitHub only)
 skip_tags: true
 
+skip_commits:
+  files:
+    - docs/*
+    - LICENSE
+    - README.md
+
+pull_requests:
+  do_not_increment_build_number: true
 
 #---------------------------------#
 #    environment configuration    #
@@ -142,6 +150,7 @@ deploy:
       branch: master                # release from master branch only
       configuration: release        # deploy release builds only
       appveyor_repo_tag: true       # deploy on tag push only
+      is_not_pr: true               # don't deploy pull requests
 
 # scripts to run before deployment
 #before_deploy:
