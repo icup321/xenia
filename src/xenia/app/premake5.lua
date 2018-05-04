@@ -10,6 +10,7 @@ project("xenia-app")
   links({
     "capstone",
     "gflags",
+    "glew",
     "glslang-spirv",
     "imgui",
     "libavcodec",
@@ -25,14 +26,12 @@ project("xenia-app")
     "xenia-cpu-backend-x64",
     "xenia-debug-ui",
     "xenia-gpu",
-    "xenia-gpu-gl4",
     "xenia-gpu-null",
     "xenia-gpu-vulkan",
     "xenia-hid",
     "xenia-hid-nop",
     "xenia-kernel",
     "xenia-ui",
-    "xenia-ui-gl",
     "xenia-ui-spirv",
     "xenia-ui-vulkan",
     "xenia-vfs",
@@ -58,6 +57,15 @@ project("xenia-app")
   resincludedirs({
     project_root,
   })
+
+  filter("platforms:Linux")
+    links({
+      "X11",
+      "xcb",
+      "X11-xcb",
+      "GL",
+      "vulkan",
+    })
 
   filter("platforms:Windows")
     links({

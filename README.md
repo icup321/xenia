@@ -4,11 +4,11 @@ Xenia - Xbox 360 Emulator Research Project
 Xenia is an experimental emulator for the Xbox 360. For more information see the
 [main xenia website](http://xenia.jp/).
 
-Come chat with us about **emulator-related topics** in
-[#xenia @ irc.freenode.net](http://webchat.freenode.net?channels=%23xenia&uio=MTE9NzIaa).
-For developer chat join `#xenia-dev` but stay on topic. Lurking is fine.
+Come chat with us about **emulator-related topics** on [Discord](https://discord.gg/Q9mxZf9).
+For developer chat join `#dev` but stay on topic. Lurking is fine.
 Please check the [frequently asked questions](http://xenia.jp/faq/) page before
 asking questions. We've got jobs/lives/etc, so don't expect instant answers.
+
 Discussing illegal activities will get you banned. No warnings.
 
 ## Status
@@ -80,7 +80,7 @@ that there are some major work areas still untouched:
 * Add input drivers for [PS4 controllers](https://github.com/benvanik/xenia/issues/60) (or anything else)
 * Skilled with Linux? A strong contributor is needed to [help with porting](https://github.com/benvanik/xenia/labels/cross%20platform)
 
-See more projects [good for contributors](https://github.com/benvanik/xenia/labels/good%20for%20contributors). It's a good idea to ask on IRC/the bugs before beginning work
+See more projects [good for contributors](https://github.com/benvanik/xenia/labels/good%20first%20issue). It's a good idea to ask on IRC/the bugs before beginning work
 on something.
 
 ## FAQ

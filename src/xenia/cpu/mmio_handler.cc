@@ -118,16 +118,16 @@ uintptr_t MMIOHandler::AddPhysicalAccessWatch(uint32_t guest_address,
     bool hit = false;
     auto entry = *it;
 
-    if (base_address < (*it)->address &&
+    if (base_address <= (*it)->address &&
         base_address + length > (*it)->address) {
       hit = true;
-    } else if ((*it)->address < base_address &&
+    } else if ((*it)->address <= base_address &&
                (*it)->address + (*it)->length > base_address) {
       hit = true;
-    } else if ((*it)->address < base_address &&
+    } else if ((*it)->address <= base_address &&
                (*it)->address + (*it)->length > base_address + length) {
       hit = true;
-    } else if ((*it)->address > base_address &&
+    } else if ((*it)->address >= base_address &&
                (*it)->address + (*it)->length < base_address + length) {
       hit = true;
     }
@@ -240,11 +240,19 @@ bool MMIOHandler::IsRangeWatched(uint32_t physical_address, size_t length) {
   for (auto it = access_watches_.begin(); it != access_watches_.end(); ++it) {
     auto entry = *it;
     if ((entry->address <= physical_address &&
-         entry->address + entry->length > physical_address) ||
-        (entry->address >= physical_address &&
-         entry->address < physical_address + length)) {
-      // This watch lies within the range.
+         entry->address + entry->length > physical_address + length)) {
+      // This range lies entirely within this watch.
       return true;
+    }
+
+    // TODO(DrChat): Check if the range is partially covered, and subtract the
+    // covered portion if it is.
+    if ((entry->address <= physical_address &&
+         entry->address + entry->length > physical_address)) {
+      // The beginning of range lies partially within this watch.
+    } else if ((entry->address < physical_address + length &&
+                entry->address + entry->length > physical_address + length)) {
+      // The ending of this range lies partially within this watch.
     }
   }
 

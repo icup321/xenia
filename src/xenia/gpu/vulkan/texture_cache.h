@@ -11,6 +11,7 @@
 #define XENIA_GPU_VULKAN_TEXTURE_CACHE_H_
 
 #include <unordered_map>
+#include <unordered_set>
 
 #include "xenia/gpu/register_file.h"
 #include "xenia/gpu/sampler_info.h"
@@ -46,6 +47,7 @@ class TextureCache {
     VmaAllocation alloc;
     VmaAllocationInfo alloc_info;
     VkFramebuffer framebuffer;  // Blit target frame buffer.
+    VkImageUsageFlags usage_flags;
 
     uintptr_t access_watch_handle;
     bool pending_invalidation;
@@ -134,6 +136,9 @@ class TextureCache {
                                VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
   bool FreeTexture(Texture* texture);
 
+  static void WatchCallback(void* context_ptr, void* data_ptr,
+                            uint32_t address);
+
   // Demands a texture. If command_buffer is null and the texture hasn't been
   // uploaded to graphics memory already, we will return null and bail.
   Texture* Demand(const TextureInfo& texture_info,
@@ -144,15 +149,12 @@ class TextureCache {
   void FlushPendingCommands(VkCommandBuffer command_buffer,
                             VkFence completion_fence);
 
-  static void ConvertTexelCTX1(uint8_t* dest, size_t dest_pitch,
-                               const uint8_t* src, Endian src_endianness);
-
   bool ConvertTexture2D(uint8_t* dest, VkBufferImageCopy* copy_region,
-                        const TextureInfo& src);
-  bool ConvertTextureCube(uint8_t* dest, VkBufferImageCopy* copy_region,
+                        uint32_t mip, const TextureInfo& src);
+  bool ConvertTextureCube(uint8_t* dest, VkBufferImageCopy* copy_regions,
                           const TextureInfo& src);
   bool ConvertTexture(uint8_t* dest, VkBufferImageCopy* copy_region,
-                      const TextureInfo& src);
+                      uint32_t mip, const TextureInfo& src);
   bool ComputeTextureStorage(size_t* output_length, const TextureInfo& src);
 
   // Writes a texture back into guest memory. This call is (mostly) asynchronous
@@ -188,7 +190,7 @@ class TextureCache {
 
   std::unique_ptr<xe::ui::vulkan::CommandBufferPool> wb_command_pool_ = nullptr;
   std::unique_ptr<xe::ui::vulkan::DescriptorPool> descriptor_pool_ = nullptr;
-  std::unordered_map<uint64_t, VkDescriptorSet> texture_bindings_;
+  std::unordered_map<uint64_t, VkDescriptorSet> texture_sets_;
   VkDescriptorSetLayout texture_descriptor_set_layout_ = nullptr;
 
   VmaAllocator mem_allocator_ = nullptr;
@@ -200,8 +202,8 @@ class TextureCache {
   std::list<Texture*> pending_delete_textures_;
 
   std::mutex invalidated_textures_mutex_;
-  std::vector<Texture*>* invalidated_textures_;
-  std::vector<Texture*> invalidated_textures_sets_[2];
+  std::unordered_set<Texture*>* invalidated_textures_;
+  std::unordered_set<Texture*> invalidated_textures_sets_[2];
 
   struct UpdateSetInfo {
     // Bitmap of all 32 fetch constants and whether they have been setup yet.

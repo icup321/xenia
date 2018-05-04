@@ -17,8 +17,8 @@
 #include "xenia/base/main.h"
 #include "xenia/base/threading.h"
 #include "xenia/hid/input_system.h"
-#include "xenia/ui/gl/gl_provider.h"
 #include "xenia/ui/imgui_drawer.h"
+#include "xenia/ui/vulkan/vulkan_provider.h"
 #include "xenia/ui/window.h"
 
 // Available input drivers:
@@ -67,7 +67,7 @@ std::vector<std::unique_ptr<hid::InputDriver>> CreateInputDrivers(
 
 std::unique_ptr<xe::ui::GraphicsProvider> CreateDemoGraphicsProvider(
     xe::ui::Window* window) {
-  return xe::ui::gl::GLProvider::Create(window);
+  return xe::ui::vulkan::VulkanProvider::Create(window);
 }
 
 void DrawInputStatus();
@@ -176,8 +176,10 @@ void DrawUserInputStatus(uint32_t user_index) {
   ImGui::Text("     Shoulders: [%c][%c]",
               gamepad.buttons & X_INPUT_GAMEPAD_LEFT_SHOULDER ? 'L' : ' ',
               gamepad.buttons & X_INPUT_GAMEPAD_RIGHT_SHOULDER ? 'R' : ' ');
-  ImGui::Text("  Left Trigger: %3u", gamepad.left_trigger);
-  ImGui::Text(" Right Trigger: %3u", gamepad.right_trigger);
+  ImGui::Text("  Left Trigger: %3u",
+              static_cast<uint16_t>(gamepad.left_trigger));
+  ImGui::Text(" Right Trigger: %3u",
+              static_cast<uint16_t>(gamepad.right_trigger));
   ImGui::Text("    Left Thumb: %6d, %6d",
               static_cast<int32_t>(gamepad.thumb_lx),
               static_cast<int32_t>(gamepad.thumb_ly));

@@ -26,7 +26,6 @@
 #endif  // XE_PLATFORM_WIN32
 
 // Available graphics systems:
-#include "xenia/gpu/gl4/gl4_graphics_system.h"
 #include "xenia/gpu/null/null_graphics_system.h"
 #include "xenia/gpu/vulkan/vulkan_graphics_system.h"
 
@@ -38,7 +37,7 @@
 #endif  // XE_PLATFORM_WIN32
 
 DEFINE_string(apu, "any", "Audio system. Use: [any, nop, xaudio2]");
-DEFINE_string(gpu, "any", "Graphics system. Use: [any, gl4, vulkan, null]");
+DEFINE_string(gpu, "any", "Graphics system. Use: [any, vulkan, null]");
 DEFINE_string(hid, "any", "Input system. Use: [any, nop, winkey, xinput]");
 
 DEFINE_string(target, "", "Specifies the target .xex or .iso to execute.");
@@ -71,10 +70,7 @@ std::unique_ptr<apu::AudioSystem> CreateAudioSystem(cpu::Processor* processor) {
 }
 
 std::unique_ptr<gpu::GraphicsSystem> CreateGraphicsSystem() {
-  if (FLAGS_gpu.compare("gl4") == 0) {
-    return std::unique_ptr<gpu::GraphicsSystem>(
-        new xe::gpu::gl4::GL4GraphicsSystem());
-  } else if (FLAGS_gpu.compare("vulkan") == 0) {
+  if (FLAGS_gpu.compare("vulkan") == 0) {
     return std::unique_ptr<gpu::GraphicsSystem>(
         new xe::gpu::vulkan::VulkanGraphicsSystem());
   } else if (FLAGS_gpu.compare("null") == 0) {
@@ -174,10 +170,19 @@ int xenia_main(const std::vector<std::wstring>& args) {
     evt->Set();
   });
 
+  emulator_window->window()->on_closing.AddListener([&](ui::UIEvent* e) {
+    // This needs to shut down before the graphics context.
+    Profiler::Shutdown();
+  });
+
   bool exiting = false;
   emulator_window->loop()->on_quit.AddListener([&](ui::UIEvent* e) {
     exiting = true;
     evt->Set();
+
+    // TODO(DrChat): Remove this code and do a proper exit.
+    XELOGI("Cheap-skate exit!");
+    exit(0);
   });
 
   // Enable the main menu now that the emulator is properly loaded
@@ -205,7 +210,7 @@ int xenia_main(const std::vector<std::wstring>& args) {
     std::wstring abs_path = xe::to_absolute_path(path);
     result = emulator->LaunchPath(abs_path);
     if (XFAILED(result)) {
-      XELOGE("Failed to launch target: %.8X", result);
+      xe::FatalError("Failed to launch target: %.8X", result);
       emulator.reset();
       emulator_window.reset();
       return 1;
@@ -229,10 +234,10 @@ int xenia_main(const std::vector<std::wstring>& args) {
 
   debug_window.reset();
   emulator.reset();
-  emulator_window.reset();
 
   Profiler::Dump();
   Profiler::Shutdown();
+  emulator_window.reset();
   return 0;
 }
 

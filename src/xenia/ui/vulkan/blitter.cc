@@ -100,15 +100,12 @@ VkResult Blitter::Initialize(VulkanDevice* device) {
   pipeline_layout_info.pSetLayouts = set_layouts;
   VkPushConstantRange push_constant_ranges[2];
 
-  // vec4 src_uv
   push_constant_ranges[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
   push_constant_ranges[0].offset = 0;
-  push_constant_ranges[0].size = sizeof(float) * 4;
-
-  // bool swap_channels
+  push_constant_ranges[0].size = sizeof(VtxPushConstants);
   push_constant_ranges[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-  push_constant_ranges[1].offset = sizeof(float) * 4;
-  push_constant_ranges[1].size = sizeof(int) * 4;
+  push_constant_ranges[1].offset = sizeof(VtxPushConstants);
+  push_constant_ranges[1].size = sizeof(PixPushConstants);
 
   pipeline_layout_info.pushConstantRangeCount =
       static_cast<uint32_t>(xe::countof(push_constant_ranges));
@@ -220,8 +217,9 @@ void Blitter::Scavenge() {
 void Blitter::BlitTexture2D(VkCommandBuffer command_buffer, VkFence fence,
                             VkImageView src_image_view, VkRect2D src_rect,
                             VkExtent2D src_extents, VkFormat dst_image_format,
-                            VkOffset2D dst_offset, VkExtent2D dst_extents,
-                            VkFramebuffer dst_framebuffer, VkFilter filter,
+                            VkRect2D dst_rect, VkExtent2D dst_extents,
+                            VkFramebuffer dst_framebuffer, VkViewport viewport,
+                            VkRect2D scissor, VkFilter filter,
                             bool color_or_depth, bool swap_channels) {
   // Do we need a full draw, or can we cheap out with a blit command?
   bool full_draw = swap_channels || true;
@@ -237,7 +235,7 @@ void Blitter::BlitTexture2D(VkCommandBuffer command_buffer, VkFence fence,
         nullptr,
         render_pass,
         dst_framebuffer,
-        {{dst_offset.x, dst_offset.y}, {dst_extents.width, dst_extents.height}},
+        {{0, 0}, dst_extents},
         0,
         nullptr,
     };
@@ -245,33 +243,23 @@ void Blitter::BlitTexture2D(VkCommandBuffer command_buffer, VkFence fence,
     vkCmdBeginRenderPass(command_buffer, &render_pass_info,
                          VK_SUBPASS_CONTENTS_INLINE);
 
-    VkViewport viewport = {
-        float(dst_offset.x),
-        float(dst_offset.y),
-        float(dst_extents.width),
-        float(dst_extents.height),
-        0.f,
-        1.f,
-    };
     vkCmdSetViewport(command_buffer, 0, 1, &viewport);
-
-    VkRect2D scissor = {
-        dst_offset.x,
-        dst_offset.y,
-        dst_extents.width,
-        dst_extents.height,
-    };
     vkCmdSetScissor(command_buffer, 0, 1, &scissor);
 
     // Acquire a pipeline.
     auto pipeline =
-        GetPipeline(render_pass, color_or_depth ? blit_color_ : blit_depth_);
+        GetPipeline(render_pass, color_or_depth ? blit_color_ : blit_depth_,
+                    color_or_depth);
     vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                       pipeline);
 
     // Acquire and update a descriptor set for this image.
     auto set = descriptor_pool_->AcquireEntry(descriptor_set_layout_);
-    assert_not_null(set);
+    if (!set) {
+      assert_always();
+      descriptor_pool_->CancelBatch();
+      return;
+    }
 
     VkWriteDescriptorSet write;
     write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -301,6 +289,12 @@ void Blitter::BlitTexture2D(VkCommandBuffer command_buffer, VkFence fence,
             float(src_rect.offset.y) / src_extents.height,
             float(src_rect.extent.width) / src_extents.width,
             float(src_rect.extent.height) / src_extents.height,
+        },
+        {
+            float(dst_rect.offset.x) / dst_extents.width,
+            float(dst_rect.offset.y) / dst_extents.height,
+            float(dst_rect.extent.width) / dst_extents.width,
+            float(dst_rect.extent.height) / dst_extents.height,
         },
     };
     vkCmdPushConstants(command_buffer, pipeline_layout_,
@@ -350,14 +344,16 @@ VkRenderPass Blitter::GetRenderPass(VkFormat format, bool color_or_depth) {
 }
 
 VkPipeline Blitter::GetPipeline(VkRenderPass render_pass,
-                                VkShaderModule frag_shader) {
+                                VkShaderModule frag_shader,
+                                bool color_or_depth) {
   auto it = pipelines_.find(std::make_pair(render_pass, frag_shader));
   if (it != pipelines_.end()) {
     return it->second;
   }
 
   // Create and cache the pipeline.
-  VkPipeline pipeline = CreatePipeline(render_pass, frag_shader);
+  VkPipeline pipeline =
+      CreatePipeline(render_pass, frag_shader, color_or_depth);
   if (pipeline) {
     pipelines_[std::make_pair(render_pass, frag_shader)] = pipeline;
   }
@@ -374,12 +370,14 @@ VkRenderPass Blitter::CreateRenderPass(VkFormat output_format,
   attachments[0].flags = 0;
   attachments[0].format = output_format;
   attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
-  attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+  attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
   attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-  attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+  attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
   attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
-  attachments[0].initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-  attachments[0].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  attachments[0].initialLayout =
+      color_or_depth ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                     : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+  attachments[0].finalLayout = attachments[0].initialLayout;
 
   VkAttachmentReference attach_refs[1];
   attach_refs[0].attachment = 0;
@@ -422,7 +420,8 @@ VkRenderPass Blitter::CreateRenderPass(VkFormat output_format,
 }
 
 VkPipeline Blitter::CreatePipeline(VkRenderPass render_pass,
-                                   VkShaderModule frag_shader) {
+                                   VkShaderModule frag_shader,
+                                   bool color_or_depth) {
   VkResult result = VK_SUCCESS;
 
   // Pipeline
@@ -526,18 +525,26 @@ VkPipeline Blitter::CreatePipeline(VkRenderPass render_pass,
   blend_info.flags = 0;
   blend_info.logicOpEnable = VK_FALSE;
   blend_info.logicOp = VK_LOGIC_OP_NO_OP;
+
   VkPipelineColorBlendAttachmentState blend_attachments[1];
-  blend_attachments[0].blendEnable = VK_FALSE;
-  blend_attachments[0].srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-  blend_attachments[0].dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
-  blend_attachments[0].colorBlendOp = VK_BLEND_OP_ADD;
-  blend_attachments[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-  blend_attachments[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-  blend_attachments[0].alphaBlendOp = VK_BLEND_OP_ADD;
-  blend_attachments[0].colorWriteMask = 0xF;
-  blend_info.attachmentCount =
-      static_cast<uint32_t>(xe::countof(blend_attachments));
-  blend_info.pAttachments = blend_attachments;
+  if (color_or_depth) {
+    blend_attachments[0].blendEnable = VK_FALSE;
+    blend_attachments[0].srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blend_attachments[0].dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+    blend_attachments[0].colorBlendOp = VK_BLEND_OP_ADD;
+    blend_attachments[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blend_attachments[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    blend_attachments[0].alphaBlendOp = VK_BLEND_OP_ADD;
+    blend_attachments[0].colorWriteMask = 0xF;
+
+    blend_info.attachmentCount =
+        static_cast<uint32_t>(xe::countof(blend_attachments));
+    blend_info.pAttachments = blend_attachments;
+  } else {
+    blend_info.attachmentCount = 0;
+    blend_info.pAttachments = nullptr;
+  }
+
   std::memset(blend_info.blendConstants, 0, sizeof(blend_info.blendConstants));
   pipeline_info.pColorBlendState = &blend_info;
   VkPipelineDynamicStateCreateInfo dynamic_state_info;

@@ -28,9 +28,11 @@ defines({
 })
 
 -- TODO(DrChat): Find a way to disable this on other architectures.
-filter("architecture:x86_64")
-  vectorextensions("AVX")
-filter({})
+if ARCH ~= "ppc64" then
+  filter("architecture:x86_64")
+    vectorextensions("AVX")
+  filter({})
+end
 
 characterset("Unicode")
 flags({
@@ -87,26 +89,17 @@ filter("platforms:Linux")
   toolset("clang")
   buildoptions({
     -- "-mlzcnt",  -- (don't) Assume lzcnt is supported.
-    "`pkg-config --cflags gtk+-x11-3.0`"
+    "`pkg-config --cflags gtk+-x11-3.0`",
+    "-fno-lto", -- Premake doesn't support LTO on clang
   })
   links({
     "pthread",
     "dl",
     "lz4",
-    "X11",
-    "xcb",
-    "X11-xcb",
-    "GL",
-    "GLEW",
-    "vulkan",
-    "c++",
-    "c++abi"
+    "rt",
   })
   linkoptions({
     "`pkg-config --libs gtk+-3.0`",
-  })
-  disablewarnings({
-    "deprecated-register"
   })
 
 filter({"platforms:Linux", "kind:*App"})
@@ -114,17 +107,34 @@ filter({"platforms:Linux", "kind:*App"})
 
 filter({"platforms:Linux", "language:C++", "toolset:gcc"})
   buildoptions({
-    "--std=c++11",
+    "-std=c++14",
   })
   links({
   })
 
+filter({"platforms:Linux", "toolset:gcc"})
+  if ARCH == "ppc64" then
+    buildoptions({
+      "-m32",
+      "-mpowerpc64"
+    })
+    linkoptions({
+      "-m32",
+      "-mpowerpc64"
+    })
+  end
+
 filter({"platforms:Linux", "language:C++", "toolset:clang"})
   buildoptions({
     "-std=c++14",
-    "-stdlib=libc++",
+    "-stdlib=libstdc++",
   })
   links({
+    "c++",
+    "c++abi"
+  })
+  disablewarnings({
+    "deprecated-register"
   })
 
 filter("platforms:Windows")
@@ -138,6 +148,7 @@ filter("platforms:Windows")
     "/wd4127",  -- 'conditional expression is constant'.
     "/wd4324",  -- 'structure was padded due to alignment specifier'.
     "/wd4189",  -- 'local variable is initialized but not referenced'.
+    "/utf-8",   -- 'build correctly on systems with non-Latin codepages'.
   })
   flags({
     "NoMinimalRebuild", -- Required for /MP above.
@@ -231,13 +242,11 @@ solution("xenia")
   include("src/xenia/debug/ui")
   include("src/xenia/gpu")
   include("src/xenia/gpu/null")
-  include("src/xenia/gpu/gl4")
   include("src/xenia/gpu/vulkan")
   include("src/xenia/hid")
   include("src/xenia/hid/nop")
   include("src/xenia/kernel")
   include("src/xenia/ui")
-  include("src/xenia/ui/gl")
   include("src/xenia/ui/spirv")
   include("src/xenia/ui/vulkan")
   include("src/xenia/vfs")

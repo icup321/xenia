@@ -37,16 +37,19 @@ X_STATUS VulkanGraphicsSystem::Setup(cpu::Processor* processor,
                                      kernel::KernelState* kernel_state,
                                      ui::Window* target_window) {
   // Must create the provider so we can create contexts.
-  provider_ = xe::ui::vulkan::VulkanProvider::Create(target_window);
+  auto provider = xe::ui::vulkan::VulkanProvider::Create(target_window);
+  device_ = provider->device();
+  provider_ = std::move(provider);
 
   auto result = GraphicsSystem::Setup(processor, kernel_state, target_window);
   if (result) {
     return result;
   }
 
-  display_context_ = reinterpret_cast<xe::ui::vulkan::VulkanContext*>(
-      target_window->context());
-  device_ = display_context_->device();
+  if (target_window) {
+    display_context_ = reinterpret_cast<xe::ui::vulkan::VulkanContext*>(
+        target_window->context());
+  }
 
   // Create our own command pool we can use for captures.
   VkCommandPoolCreateInfo create_info = {
@@ -260,27 +263,21 @@ void VulkanGraphicsSystem::Swap(xe::ui::UIEvent* e) {
   if (!command_processor_) {
     return;
   }
+
   // Check for pending swap.
   auto& swap_state = command_processor_->swap_state();
+  if (display_context_->WasLost()) {
+    // We're crashing. Cheese it.
+    swap_state.pending = false;
+    return;
+  }
+
   {
     std::lock_guard<std::mutex> lock(swap_state.mutex);
     if (!swap_state.pending) {
       // return;
     }
 
-    auto event = reinterpret_cast<VkEvent>(swap_state.backend_data);
-    if (event == nullptr) {
-      // The command processor is currently uninitialized.
-      return;
-    }
-
-    VkResult status = vkGetEventStatus(*device_, event);
-    if (status != VK_EVENT_SET) {
-      // The device has not finished processing the image.
-      // return;
-    }
-
-    vkResetEvent(*device_, event);
     swap_state.pending = false;
   }
 
@@ -294,11 +291,6 @@ void VulkanGraphicsSystem::Swap(xe::ui::UIEvent* e) {
   auto front_buffer =
       reinterpret_cast<VkImage>(swap_state.front_buffer_texture);
 
-  // Wait on and signal the swap semaphore.
-  // TODO(DrChat): Interacting with the window causes the device to be lost in
-  // some games.
-  // swap_chain->WaitAndSignalSemaphore(semaphore);
-
   VkImageMemoryBarrier barrier;
   std::memset(&barrier, 0, sizeof(VkImageMemoryBarrier));
   barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -310,8 +302,8 @@ void VulkanGraphicsSystem::Swap(xe::ui::UIEvent* e) {
   barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
   barrier.image = front_buffer;
   barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-  vkCmdPipelineBarrier(copy_cmd_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                       VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, 0, nullptr, 0,
+  vkCmdPipelineBarrier(copy_cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
                        nullptr, 1, &barrier);
 
   VkImageBlit region;
